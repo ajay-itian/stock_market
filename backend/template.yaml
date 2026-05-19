@@ -1,0 +1,419 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  Indian Equity Screener — FastAPI on Lambda + DynamoDB
+  Deploys: 7 DynamoDB tables, 2 Lambda functions, HTTP API Gateway,
+           2 EventBridge Scheduler rules, IAM roles, CloudWatch Log Groups.
+
+# =============================================================================
+# Parameters
+# =============================================================================
+Parameters:
+
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment (used as resource name suffix)
+
+  ScreenerAdminKey:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: >
+      Secret value for the X-Admin-Api-Key header. Leave empty to disable
+      authentication (not recommended for production).
+
+  ScreenerUiOrigin:
+    Type: String
+    Default: "http://localhost:5173,http://localhost:4173"
+    Description: Comma-separated CORS allowed origins for the UI
+
+  Nifty500Url:
+    Type: String
+    Default: "https://archives.nseindia.com/content/indices/ind_nifty500list.csv"
+    Description: URL of the NSE Nifty 500 constituent CSV
+
+  TickersOverride:
+    Type: String
+    Default: ""
+    Description: >
+      Optional comma-separated ticker override (e.g. RELIANCE.NS,TCS.NS).
+      When set, the Nifty500 CSV is not fetched.
+
+  ApiLambdaMemoryMB:
+    Type: Number
+    Default: 512
+    MinValue: 256
+    MaxValue: 3008
+    Description: Memory (MB) for the API Lambda function
+
+  RefreshLambdaMemoryMB:
+    Type: Number
+    Default: 1024
+    MinValue: 512
+    MaxValue: 3008
+    Description: Memory (MB) for the Refresh Lambda (needs more for yfinance bulk)
+
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365]
+    Description: CloudWatch Log Group retention in days
+
+# =============================================================================
+# Globals
+# =============================================================================
+Globals:
+  Function:
+    Runtime: python3.13
+    Architectures: [x86_64]
+    Tracing: Active
+    Environment:
+      Variables:
+        POWERTOOLS_SERVICE_NAME: equity-screener
+        DDB_TBL_QUOTES:        !Ref QuotesTable
+        DDB_TBL_INFO:          !Ref InfoTable
+        DDB_TBL_FINANCIALS:    !Ref FinancialsTable
+        DDB_TBL_BALANCE_SHEET: !Ref BalanceSheetTable
+        DDB_TBL_HISTORY:       !Ref HistoryTable
+        DDB_TBL_META:          !Ref MetaTable
+        DDB_TBL_NEWS_CACHE:    !Ref NewsCacheTable
+        SCREENER_ADMIN_KEY:    !Ref ScreenerAdminKey
+        SCREENER_UI_ORIGIN:    !Ref ScreenerUiOrigin
+        NIFTY500_URL:          !Ref Nifty500Url
+        TICKERS:               !Ref TickersOverride
+
+# =============================================================================
+# Resources
+# =============================================================================
+Resources:
+
+  # ---------------------------------------------------------------------------
+  # DynamoDB Tables
+  # ---------------------------------------------------------------------------
+
+  QuotesTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "equity-screener-${Environment}-quotes"
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !If [IsProd, true, false]
+      AttributeDefinitions:
+        - AttributeName: symbol
+          AttributeType: S
+        - AttributeName: date
+          AttributeType: S
+      KeySchema:
+        - AttributeName: symbol
+          KeyType: HASH
+        - AttributeName: date
+          KeyType: RANGE
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: equity-screener
+
+  InfoTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "equity-screener-${Environment}-info"
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !If [IsProd, true, false]
+      AttributeDefinitions:
+        - AttributeName: symbol
+          AttributeType: S
+      KeySchema:
+        - AttributeName: symbol
+          KeyType: HASH
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: equity-screener
+
+  FinancialsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "equity-screener-${Environment}-financials"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: symbol
+          AttributeType: S
+        - AttributeName: fiscal_year
+          AttributeType: S
+      KeySchema:
+        - AttributeName: symbol
+          KeyType: HASH
+        - AttributeName: fiscal_year
+          KeyType: RANGE
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: equity-screener
+
+  BalanceSheetTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "equity-screener-${Environment}-balance-sheet"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: symbol
+          AttributeType: S
+        - AttributeName: fiscal_year
+          AttributeType: S
+      KeySchema:
+        - AttributeName: symbol
+          KeyType: HASH
+        - AttributeName: fiscal_year
+          KeyType: RANGE
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: equity-screener
+
+  HistoryTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "equity-screener-${Environment}-history"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: symbol
+          AttributeType: S
+        - AttributeName: date
+          AttributeType: S
+      KeySchema:
+        - AttributeName: symbol
+          KeyType: HASH
+        - AttributeName: date
+          KeyType: RANGE
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: equity-screener
+
+  MetaTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "equity-screener-${Environment}-meta"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: key
+          KeyType: HASH
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: equity-screener
+
+  NewsCacheTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "equity-screener-${Environment}-news-cache"
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      AttributeDefinitions:
+        - AttributeName: symbol
+          AttributeType: S
+      KeySchema:
+        - AttributeName: symbol
+          KeyType: HASH
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: equity-screener
+
+  # ---------------------------------------------------------------------------
+  # CloudWatch Log Groups
+  # ---------------------------------------------------------------------------
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/equity-screener-${Environment}-api"
+      RetentionInDays: !Ref LogRetentionDays
+
+  RefreshLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/equity-screener-${Environment}-refresh"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ---------------------------------------------------------------------------
+  # Lambda: API  (FastAPI + Mangum)
+  # Deps bundled directly into CodeUri — no separate layer needed.
+  # ---------------------------------------------------------------------------
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "equity-screener-${Environment}-api"
+      Description: "FastAPI equity screener — HTTP API handler"
+      CodeUri: dist/function/
+      Handler: app.main.handler
+      MemorySize: !Ref ApiLambdaMemoryMB
+      Timeout: 30
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - AWSXRayDaemonWriteAccess
+        - DynamoDBCrudPolicy:
+            TableName: !Ref QuotesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref InfoTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinancialsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BalanceSheetTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref HistoryTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MetaTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref NewsCacheTable
+      Events:
+        ApiRoot:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /
+            Method: ANY
+        ApiProxy:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /{proxy+}
+            Method: ANY
+      Tags:
+        Environment: !Ref Environment
+        Project: equity-screener
+
+  # ---------------------------------------------------------------------------
+  # Lambda: Refresh  (EventBridge Scheduler target, 15-min timeout)
+  # Scheduler events use SAM's Schedule event type — no cross-resource ARN ref.
+  # ---------------------------------------------------------------------------
+  RefreshFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "equity-screener-${Environment}-refresh"
+      Description: "Scheduled yfinance data refresh — quotes-only and full modes"
+      CodeUri: dist/function/
+      Handler: app.refresh_handler.handler
+      MemorySize: !Ref RefreshLambdaMemoryMB
+      Timeout: 900
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - AWSXRayDaemonWriteAccess
+        - DynamoDBCrudPolicy:
+            TableName: !Ref QuotesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref InfoTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinancialsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BalanceSheetTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref HistoryTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MetaTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref NewsCacheTable
+      Events:
+        # Daily quotes-only refresh — 07:00 IST = 01:30 UTC
+        DailyQuotesSchedule:
+          Type: Schedule
+          Properties:
+            Schedule: "cron(30 1 * * ? *)"
+            Name: !Sub "equity-screener-${Environment}-daily-quotes"
+            Description: "Daily fast quotes refresh at 07:00 IST"
+            Input: '{"mode":"quotes_only"}'
+            Enabled: true
+        # Weekly full refresh — Sunday 06:00 IST = 00:30 UTC
+        WeeklyFullSchedule:
+          Type: Schedule
+          Properties:
+            Schedule: "cron(30 0 ? * SUN *)"
+            Name: !Sub "equity-screener-${Environment}-weekly-full"
+            Description: "Weekly full yfinance refresh every Sunday at 06:00 IST"
+            Input: '{"mode":"full"}'
+            Enabled: true
+      Tags:
+        Environment: !Ref Environment
+        Project: equity-screener
+
+  # ---------------------------------------------------------------------------
+  # API Gateway HTTP API (v2)
+  # ---------------------------------------------------------------------------
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: "$default"
+      Description: "Equity Screener HTTP API"
+      CorsConfiguration:
+        AllowOrigins: !Split [",", !Ref ScreenerUiOrigin]
+        AllowMethods: [GET, POST, OPTIONS]
+        AllowHeaders: [Content-Type, X-Admin-Api-Key]
+        MaxAge: 300
+      Tags:
+        Environment: !Ref Environment
+        Project: equity-screener
+
+# =============================================================================
+# Conditions
+# =============================================================================
+Conditions:
+  IsProd: !Equals [!Ref Environment, prod]
+
+# =============================================================================
+# Outputs
+# =============================================================================
+Outputs:
+
+  ApiEndpoint:
+    Description: Base URL for the HTTP API
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+    Export:
+      Name: !Sub "EquityScreener-${Environment}-ApiEndpoint"
+
+  ApiFunctionArn:
+    Description: ARN of the API Lambda function
+    Value: !GetAtt ApiFunction.Arn
+    Export:
+      Name: !Sub "EquityScreener-${Environment}-ApiFunctionArn"
+
+  RefreshFunctionArn:
+    Description: ARN of the Refresh Lambda function
+    Value: !GetAtt RefreshFunction.Arn
+    Export:
+      Name: !Sub "EquityScreener-${Environment}-RefreshFunctionArn"
+
+  DynamoDBTableNames:
+    Description: JSON map of logical to physical DynamoDB table names
+    Value: !Sub >
+      {"quotes":"${QuotesTable}","info":"${InfoTable}","financials":"${FinancialsTable}","balance_sheet":"${BalanceSheetTable}","history":"${HistoryTable}","meta":"${MetaTable}","news_cache":"${NewsCacheTable}"}
+
+  StackName:
+    Description: CloudFormation stack name
+    Value: !Ref AWS::StackName

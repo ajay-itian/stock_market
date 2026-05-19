@@ -1,0 +1,14 @@
+{
+  "Parameters": {
+    "DDB_TBL_QUOTES":        "equity-screener-dev-quotes",
+    "DDB_TBL_INFO":          "equity-screener-dev-info",
+    "DDB_TBL_FINANCIALS":    "equity-screener-dev-financials",
+    "DDB_TBL_BALANCE_SHEET": "equity-screener-dev-balance-sheet",
+    "DDB_TBL_HISTORY":       "equity-screener-dev-history",
+    "DDB_TBL_META":          "equity-screener-dev-meta",
+    "DDB_TBL_NEWS_CACHE":    "equity-screener-dev-news-cache",
+    "SCREENER_UI_ORIGIN":    "http://localhost:5173,http://localhost:4173",
+    "SCREENER_ADMIN_KEY":    "",
+    "DYNAMODB_AUTO_CREATE_TABLES": "true"
+  }
+}

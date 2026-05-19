@@ -1,0 +1,110 @@
+# =============================================================================
+# samconfig.toml  —  SAM CLI configuration
+# =============================================================================
+# Three environment profiles: dev, staging, prod
+#
+# Usage:
+#   sam build                          # uses [default.build.parameters]
+#   sam deploy --config-env dev        # deploy to dev
+#   sam deploy --config-env prod       # deploy to prod
+#   sam local start-api                # local API Gateway emulation
+#
+# Override any value on the CLI:
+#   sam deploy --config-env prod --parameter-overrides ScreenerAdminKey=newsecret
+# =============================================================================
+
+version = 0.1
+
+# ---------------------------------------------------------------------------
+# Build — shared across all environments
+# ---------------------------------------------------------------------------
+[default.build.parameters]
+template      = "template.yaml"
+use_container = false    # set true if you need manylinux wheels (slower)
+
+# ---------------------------------------------------------------------------
+# Local invoke / start-api — shared defaults
+# ---------------------------------------------------------------------------
+[default.local_invoke.parameters]
+template     = "template.yaml"
+env_vars     = "sam/events/local-env.json"
+docker_network = "equity-screener-local"   # matches docker-compose network
+
+[default.local_start_api.parameters]
+template     = "template.yaml"
+env_vars     = "sam/events/local-env.json"
+port         = 3000
+docker_network = "equity-screener-local"
+
+# ---------------------------------------------------------------------------
+# Dev environment
+# ---------------------------------------------------------------------------
+
+[default.deploy.parameters]
+stack_name = "sam-app"
+resolve_s3 = true
+s3_prefix = "sam-app"
+region = "ap-south-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+disable_rollback = true
+parameter_overrides = "Environment=\"prod\" ScreenerUiOrigin=\"https://your-frontend-domain.com\" Nifty500Url=\"https://archives.nseindia.com/content/indices/ind_nifty500list.csv\" TickersOverride=\"\" ApiLambdaMemoryMB=\"512\" RefreshLambdaMemoryMB=\"1024\" LogRetentionDays=\"14\""
+image_repositories = []
+
+[default.global.parameters]
+region = "ap-south-1"
+[dev.deploy.parameters]
+stack_name              = "equity-screener-dev"
+s3_bucket               = ""          # filled by sam deploy --guided on first run
+s3_prefix               = "equity-screener-dev"
+region                  = "ap-south-1"
+confirm_changeset       = true
+capabilities            = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+disable_rollback        = false
+template_file           = "template.yaml"
+parameter_overrides     = [
+  "Environment=dev",
+  "ApiLambdaMemoryMB=256",
+  "RefreshLambdaMemoryMB=512",
+  "LogRetentionDays=3",
+  "ScreenerUiOrigin=http://localhost:5173,http://localhost:4173",
+]
+# ScreenerAdminKey is intentionally omitted — defaults to "" (no auth) for dev
+
+# ---------------------------------------------------------------------------
+# Staging environment
+# ---------------------------------------------------------------------------
+[staging.deploy.parameters]
+stack_name              = "equity-screener-staging"
+s3_bucket               = ""
+s3_prefix               = "equity-screener-staging"
+region                  = "ap-south-1"
+confirm_changeset       = true
+capabilities            = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+disable_rollback        = false
+template_file           = "sam/template.yaml"
+parameter_overrides     = [
+  "Environment=staging",
+  "ApiLambdaMemoryMB=512",
+  "RefreshLambdaMemoryMB=768",
+  "LogRetentionDays=7",
+]
+
+# ---------------------------------------------------------------------------
+# Production environment
+# ---------------------------------------------------------------------------
+[prod.deploy.parameters]
+stack_name              = "equity-screener-prod"
+s3_bucket               = ""
+s3_prefix               = "equity-screener-prod"
+region                  = "ap-south-1"
+confirm_changeset       = true        # always review prod changesets
+capabilities            = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+disable_rollback        = true        # keep failed state for post-mortem
+template_file           = "sam/template.yaml"
+parameter_overrides     = [
+  "Environment=prod",
+  "ApiLambdaMemoryMB=512",
+  "RefreshLambdaMemoryMB=1024",
+  "LogRetentionDays=30",
+]
